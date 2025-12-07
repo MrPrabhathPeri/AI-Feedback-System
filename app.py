@@ -7,10 +7,10 @@ import json
 # --- 1. SETUP & SECRETS ---
 try:
     # Get key from Streamlit Cloud Secrets
-    API_KEY = st.secrets["GROQ_API_KEY"]
+    API_KEY = st.secrets["GOOGLE_API_KEY"]
 except FileNotFoundError:
     # If secrets missing, show error
-    st.error("⚠️ API Key missing! Please add GROQ_API_KEY to your Secrets.")
+    st.error("⚠️ API Key missing! Please add GOOGLE_API_KEY to your Secrets.")
     st.stop()
 
 # --- 2. CONFIGURATION ---
@@ -150,4 +150,5 @@ elif page == "Admin Dashboard":
                 
         except Exception as e:
             st.error(f"Error reading database: {e}")
+
 
