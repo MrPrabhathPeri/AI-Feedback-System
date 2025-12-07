@@ -6,25 +6,31 @@ import json
 
 # --- 1. SETUP & SECRETS ---
 try:
-    # Tries to get key from Streamlit Secrets (for deployment)
+    # Get key from Streamlit Cloud Secrets
     API_KEY = st.secrets["GOOGLE_API_KEY"]
 except FileNotFoundError:
-    # If secrets file is missing, show error
-    st.error("⚠️ API Key missing! Please add GOOGLE_API_KEY to your .streamlit/secrets.toml file (local) or Streamlit Cloud Secrets.")
+    # If secrets missing, show error
+    st.error("⚠️ API Key missing! Please add GOOGLE_API_KEY to your Secrets.")
     st.stop()
 
 # --- 2. CONFIGURATION ---
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('models/gemini-2.0-flash') # Using the fast 2.0 model
+
+# PRIORITY LIST OF MODELS TO TRY
+# If the first one hits a limit, we try the next.
+MODEL_FALLBACK_LIST = [
+    "models/gemini-2.0-flash",
+    "models/gemini-2.0-flash-lite-preview-02-05", 
+    "models/gemini-2.5-flash"
+]
 
 # --- 3. DATABASE (CSV FILE) ---
 DB_FILE = "reviews.csv"
 
 if not os.path.exists(DB_FILE):
-    # Initialize CSV with headers
     pd.DataFrame(columns=["rating", "review", "summary", "action", "reply", "timestamp"]).to_csv(DB_FILE, index=False)
 
-# --- 4. AI FUNCTIONS ---
+# --- 4. AI FUNCTIONS (WITH FALLBACK LOGIC) ---
 def process_review(review_text, rating):
     prompt = f"""
     You are a helpful customer support AI for Fynd.
@@ -36,20 +42,42 @@ def process_review(review_text, rating):
     
     Return JSON: {{"summary": "...", "action": "...", "reply": "..."}}
     """
-    try:
-        response = model.generate_content(prompt)
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
-    except Exception:
-        return {
-            "summary": "Could not analyze", 
-            "action": "Manual Review Required", 
-            "reply": "Thank you for your feedback!"
-        }
+    
+    last_error = None
+    
+    # 🔄 LOOP THROUGH MODELS
+    for model_name in MODEL_FALLBACK_LIST:
+        try:
+            # Initialize the specific model
+            model = genai.GenerativeModel(model_name)
+            
+            # Attempt generation
+            response = model.generate_content(prompt)
+            
+            # Clean and Parse
+            clean_text = response.text.replace("```json", "").replace("```", "").strip()
+            result = json.loads(clean_text)
+            
+            # If we get here, it worked! Add a small note about which model was used (optional debug)
+            result['model_used'] = model_name 
+            return result
+            
+        except Exception as e:
+            # If it fails, capture error and loop to the next model
+            last_error = e
+            continue 
+
+    # If ALL models fail, show the last error
+    st.error(f"⚠️ All AI models failed. Last error: {str(last_error)}")
+    return {
+        "summary": "System Busy", 
+        "action": "Manual Review", 
+        "reply": "Thank you for your feedback! (AI currently overloaded)"
+    }
 
 # --- 5. UI ---
 st.set_page_config(page_title="Fynd AI Feedback System", layout="wide")
-st.sidebar.title("Fynd Intern Task")
+st.sidebar.title("AI Automated Feedback System")
 page = st.sidebar.radio("Select Dashboard:", ["User Dashboard", "Admin Dashboard"])
 
 # --- USER DASHBOARD ---
@@ -65,7 +93,7 @@ if page == "User Dashboard":
                 # 1. Call AI
                 ai_result = process_review(review_text, stars)
                 
-                # 2. Create New Row (Corrected for Pandas 2.0+)
+                # 2. Create New Row
                 new_data = pd.DataFrame([{
                     "rating": stars,
                     "review": review_text,
@@ -75,15 +103,19 @@ if page == "User Dashboard":
                     "timestamp": pd.Timestamp.now()
                 }])
                 
-                # 3. Append safely using concat
+                # 3. Save
                 try:
                     existing_data = pd.read_csv(DB_FILE)
-                    # FIX: Using concat instead of append
                     updated_data = pd.concat([existing_data, new_data], ignore_index=True)
                     updated_data.to_csv(DB_FILE, index=False)
                     
                     st.success("✅ Review Submitted Successfully!")
                     st.info(f"**Auto-Reply:** {ai_result.get('reply')}")
+                    
+                    # Optional: Show which model worked (Good for testing)
+                    if 'model_used' in ai_result:
+                        st.caption(f"Processed by: {ai_result['model_used']}")
+                        
                 except Exception as e:
                     st.error(f"Error saving data: {e}")
 
@@ -94,8 +126,6 @@ elif page == "Admin Dashboard":
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE)
-            
-            # Metrics
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Reviews", len(df))
             avg = df['rating'].mean() if not df.empty else 0
@@ -106,7 +136,6 @@ elif page == "Admin Dashboard":
             st.subheader("Live Feed")
             
             if not df.empty:
-                # Sort newest first
                 if 'timestamp' in df.columns:
                     df = df.sort_values(by='timestamp', ascending=False)
                 
