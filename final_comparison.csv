@@ -1,0 +1,4 @@
+Approach,Accuracy,JSON Validity
+Zero Shot,0.635,1.0
+Few Shot,0.605,1.0
+Chain of Thought,0.595,1.0
